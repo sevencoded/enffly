@@ -6,10 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 # ---- System dependencies ----
-# Keep this list minimal to reduce Fly builder time
+# chromaprint CLI (fpcalc) is provided by libchromaprint-tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    chromaprint \
     libchromaprint-tools \
     libsndfile1 \
     ca-certificates \
