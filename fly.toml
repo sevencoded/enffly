@@ -26,18 +26,3 @@ primary_region = "fra"
   memory = "1024mb"
   cpu_kind = "shared"
   cpus = 1
-
-# -------------------------------------------------
-# ENV VARS (RADNO – PREPORUKA JE fly secrets)
-# -------------------------------------------------
-[env]
-  # Auth između frontenda i backend-a
-  WORKER_SECRET = "caosvimajasamcile"
-
-  # Supabase
-  SUPABASE_URL = "https://lomhobobusbnbsbpaecv.supabase.co"
-  SUPABASE_SERVICE_KEY = "REPLACE_WITH_REAL_SERVICE_ROLE_KEY"
-  SUPABASE_BUCKET = "main_videos"
-
-  # Python runtime
-  PYTHONUNBUFFERED = "1"
