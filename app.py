@@ -16,21 +16,51 @@ app = Flask(__name__)
 
 WORKER_SECRET = os.getenv("WORKER_SECRET", "")
 
+
+# ------------------------
+# Auth helper
+# ------------------------
 def _auth_ok(req) -> bool:
     if not WORKER_SECRET:
         # allow if unset (dev), but you should set it in production
         return True
     return req.headers.get("X-Worker-Secret", "") == WORKER_SECRET
 
+
+# ------------------------
+# ROOT (IMPORTANT for Fly)
+# ------------------------
+@app.get("/")
+def root():
+    return jsonify({
+        "status": "ok",
+        "service": "enffly-backend",
+        "message": "backend is running"
+    })
+
+
+# ------------------------
+# Health
+# ------------------------
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"})
 
+
+# ------------------------
+# Capacity
+# ------------------------
 @app.get("/capacity")
 def capacity():
-    # simple static capacity info; you can wire real concurrency control later
-    return jsonify({"busy": False, "retry_after": 2})
+    return jsonify({
+        "busy": False,
+        "retry_after": 2
+    })
 
+
+# ------------------------
+# Main processing endpoint
+# ------------------------
 @app.post("/process")
 def process():
     if not _auth_ok(request):
@@ -48,7 +78,7 @@ def process():
     wav_path = None
 
     try:
-        # save upload to temp file
+        # Save upload to temp file
         suffix = os.path.splitext(f.filename or "")[1] or ".mp4"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         video_path = tmp.name
@@ -58,20 +88,22 @@ def process():
         clip_sha = sha256_file(video_path)
         clip_seconds = get_media_duration_seconds(video_path)
 
-        # Extract audio wav (mono)
+        # Extract audio WAV
         wav_path = extract_audio_wav(video_path, target_sr=8000)
 
         # ENF
-        enf_hash, enf_png, enf_quality, enf_mean, enf_std = extract_enf_from_wav(wav_path, mains_hz=50.0)
+        enf_hash, enf_png, enf_quality, enf_mean, enf_std = extract_enf_from_wav(
+            wav_path, mains_hz=50.0
+        )
 
-        # Audio fingerprint (Chromaprint)
+        # Audio fingerprint
         audio_fp = chromaprint_fp(wav_path)
         audio_fp_algo = "chromaprint_raw"
 
-        # Video pHash (first frame)
+        # Video pHash
         v_phash = video_phash_first_frame(video_path)
 
-        # Hash chain (per user)
+        # Hash chain
         prev = persist.get_chain_head(user_id)
         chain_payload = {
             "user_id": user_id,
@@ -79,20 +111,19 @@ def process():
             "clip_seconds": round(float(clip_seconds or 0.0), 3),
             "enf_hash": enf_hash,
             "enf_quality": round(float(enf_quality), 2),
-            "audio_fp": audio_fp[:64],  # store prefix in chain payload to keep it small
+            "audio_fp": audio_fp[:64],
             "video_phash": v_phash,
         }
         ch = chain_hash(prev, chain_payload)
 
-        # Optional: upload ENF png to Supabase storage
+        # Upload ENF PNG
         proof_id = str(uuid.uuid4())
-        png_path = None
         try:
             png_path = persist.upload_png(user_id, proof_id, enf_png)
         except Exception:
             png_path = None
 
-        # Save in Supabase (optional; no-op if env vars missing)
+        # Save result (optional)
         try:
             persist.save_result({
                 "id": proof_id,
@@ -112,10 +143,8 @@ def process():
             })
             persist.set_chain_head(user_id, ch)
         except Exception:
-            # still return result even if DB fails
             pass
 
-        # Return results (and PNG as base64? keep simple: return png_path + hash)
         return jsonify({
             "ok": True,
             "proof_id": proof_id,
@@ -149,9 +178,9 @@ def process():
         return jsonify({"error": str(e)}), 500
 
     finally:
-        # delete immediately
         safe_unlink(wav_path)
         safe_unlink(video_path)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
