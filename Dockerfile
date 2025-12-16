@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bullseye
 
 # ---- Environment ----
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -6,7 +6,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 # ---- System dependencies ----
-# chromaprint CLI (fpcalc) is provided by libchromaprint-tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libchromaprint-tools \
@@ -19,8 +18,7 @@ WORKDIR /app
 
 # ---- Python dependencies ----
 COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # ---- Application code ----
 COPY . .
