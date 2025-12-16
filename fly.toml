@@ -5,15 +5,39 @@ primary_region = "fra"
 [build]
   dockerfile = "Dockerfile"
 
+# -------------------------------------------------
+# HTTP SERVICE
+# -------------------------------------------------
 [http_service]
   internal_port = 8080
   force_https = true
+
+  # Auto scale-to-zero (jeftino)
   auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
+
   processes = ["app"]
 
+# -------------------------------------------------
+# VM RESOURCES
+# -------------------------------------------------
 [[vm]]
   memory = "1024mb"
   cpu_kind = "shared"
   cpus = 1
+
+# -------------------------------------------------
+# ENV VARS (FAKE – ZAMENI ILI PREBACI U fly secrets)
+# -------------------------------------------------
+[env]
+  # Auth između frontenda i backend-a
+  WORKER_SECRET = "caosvimajasamcile"
+
+  # Supabase (FAKE)
+  SUPABASE_URL = "https://lomhobobusbnbsbpaecv.supabase.co"
+  SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvbWhvYm9idXNibmJzYnBhZWN2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc5MDIxNCwiZXhwIjoyMDgwMzY2MjE0fQ.UEwmAnhv4KUaG2pQ5L4ZEVrS75lbZYE4FxuRLxOaUhc"
+  SUPABASE_BUCKET = "main_videos"
+
+  # Opcioni tuning
+  PYTHONUNBUFFERED = "1"
