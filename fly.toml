@@ -28,16 +28,16 @@ primary_region = "fra"
   cpus = 1
 
 # -------------------------------------------------
-# ENV VARS (FAKE – ZAMENI ILI PREBACI U fly secrets)
+# ENV VARS (RADNO – PREPORUKA JE fly secrets)
 # -------------------------------------------------
 [env]
   # Auth između frontenda i backend-a
   WORKER_SECRET = "caosvimajasamcile"
 
-  # Supabase (FAKE)
+  # Supabase
   SUPABASE_URL = "https://lomhobobusbnbsbpaecv.supabase.co"
-  SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvbWhvYm9idXNibmJzYnBhZWN2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDc5MDIxNCwiZXhwIjoyMDgwMzY2MjE0fQ.UEwmAnhv4KUaG2pQ5L4ZEVrS75lbZYE4FxuRLxOaUhc"
+  SUPABASE_SERVICE_KEY = "REPLACE_WITH_REAL_SERVICE_ROLE_KEY"
   SUPABASE_BUCKET = "main_videos"
 
-  # Opcioni tuning
+  # Python runtime
   PYTHONUNBUFFERED = "1"
