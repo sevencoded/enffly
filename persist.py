@@ -1,68 +1,67 @@
 import uuid
 from datetime import datetime
 from utils import supabase_client
-from hash_chain import chain_hash
 
 
 def save_proof_and_results(
-    user_id,
-    enf_hash,
-    enf_quality,
-    enf_freq_mean,
-    enf_freq_std,
-    audio_fp,
-    video_phash,
-    enf_png_bytes,
+    *,
+    user_id: str,
+    clip_seconds: float,
+    clip_sha256: str,
+    enf_hash: str,
+    enf_quality: float,
+    enf_freq_mean: float,
+    enf_freq_std: float,
+    audio_fp: str | None,
+    video_phash: str | None,
+    enf_png_bytes: bytes,
 ):
     proof_id = str(uuid.uuid4())
 
-    # ---- read previous chain head ----
-    prev = (
-        supabase_client
-        .from_("forensic_chain_head")
-        .select("head_hash")
-        .eq("user_id", user_id)
-        .maybe_single()
+    # ---- chain head (simple version) ----
+    head = supabase_client.from_("forensic_chain_head") \
+        .select("head_hash") \
+        .eq("user_id", user_id) \
         .execute()
-    )
 
-    prev_hash = prev.data["head_hash"] if prev.data else None
+    prev_hash = None
+    if head.data:
+        prev_hash = head.data[0]["head_hash"]
 
-    # ---- build chain payload ----
-    payload = {
-        "proof_id": proof_id,
-        "enf_hash": enf_hash,
-        "audio_fp": audio_fp,
-        "video_phash": video_phash,
-    }
-
-    current_chain_hash = chain_hash(prev_hash, payload)
+    current_chain_hash = clip_sha256  # simple, deterministic for now
 
     # ---- insert forensic result ----
     supabase_client.from_("forensic_results").insert({
         "id": proof_id,
         "user_id": user_id,
         "created_at": datetime.utcnow().isoformat(),
+
+        "clip_seconds": clip_seconds,
+        "clip_sha256": clip_sha256,
+
         "enf_hash": enf_hash,
         "enf_quality": enf_quality,
         "enf_freq_mean": enf_freq_mean,
         "enf_freq_std": enf_freq_std,
+
         "audio_fp": audio_fp,
         "audio_fp_algo": "chromaprint",
         "video_phash": video_phash,
+
         "chain_prev": prev_hash,
         "chain_hash": current_chain_hash,
+
         "enf_png_path": f"{user_id}/{proof_id}_enf.png",
     }).execute()
 
-    # ---- upsert chain head ----
+    # ---- update chain head ----
     supabase_client.from_("forensic_chain_head").upsert({
         "user_id": user_id,
         "head_hash": current_chain_hash,
         "updated_at": datetime.utcnow().isoformat(),
     }).execute()
 
-    # ---- upload ENF PNG ----
+    # ---- upload ENF image ----
     supabase_client.storage.from_("main_videos").upload(
         f"{user_id}/{proof_id}_enf.png",
         enf_png_bytes,
