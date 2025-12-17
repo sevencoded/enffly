@@ -30,22 +30,6 @@ def wav_duration_seconds(path: str) -> float:
     return frames / float(rate) if rate else 0.0
 
 
-def trim_wav(in_path: str, out_path: str, max_seconds: int = 30):
-    with wave.open(in_path, "rb") as w:
-        nch = w.getnchannels()
-        sampwidth = w.getsampwidth()
-        fr = w.getframerate()
-
-        max_frames = int(fr * max_seconds)
-        frames = w.readframes(max_frames)
-
-    with wave.open(out_path, "wb") as w2:
-        w2.setnchannels(nch)
-        w2.setsampwidth(sampwidth)
-        w2.setframerate(fr)
-        w2.writeframes(frames)
-
-
 @app.route("/process", methods=["POST"])
 @require_worker_secret
 def process():
@@ -61,40 +45,64 @@ def process():
     if not audio or not user_id:
         return jsonify({"error": "missing_audio_or_user"}), 400
 
+    # -------------------------------------------------
+    # 1) Save raw audio
+    # -------------------------------------------------
     raw_tmp = tempfile.NamedTemporaryFile(delete=False)
     raw_path = raw_tmp.name
     audio.save(raw_path)
 
-    wav_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    wav_path = wav_tmp.name
+    # -------------------------------------------------
+    # 2) HARD CONVERT for ENF:
+    #    - mono
+    #    - 1000 Hz (!!!)
+    #    - max 30 seconds
+    # -------------------------------------------------
+    enf_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    enf_path = enf_tmp.name
 
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", raw_path, "-ac", "1", "-ar", "44100", wav_path],
+            [
+                "ffmpeg", "-y",
+                "-i", raw_path,
+                "-ac", "1",
+                "-ar", "1000",
+                "-t", "30",
+                enf_path
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
         )
     except subprocess.CalledProcessError as e:
         safe_unlink(raw_path)
-        safe_unlink(wav_path)
+        safe_unlink(enf_path)
         return jsonify({
             "error": "audio_conversion_failed",
             "details": e.stderr.decode("utf-8", errors="replace")[:300]
         }), 400
 
-    trimmed_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    trimmed_path = trimmed_tmp.name
-    trim_wav(wav_path, trimmed_path, max_seconds=30)
-
     try:
-        clip_sha256 = sha256_file(trimmed_path)
-        clip_seconds = wav_duration_seconds(trimmed_path)
+        # -------------------------------------------------
+        # 3) Hash + duration (SAFE SIZE)
+        # -------------------------------------------------
+        clip_sha256 = sha256_file(enf_path)
+        clip_seconds = wav_duration_seconds(enf_path)
 
-        enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(trimmed_path)
+        # -------------------------------------------------
+        # 4) ENF (NOW MEMORY SAFE)
+        # -------------------------------------------------
+        enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(enf_path)
 
-        audio_fp = extract_audio_fingerprint(trimmed_path)
+        # -------------------------------------------------
+        # 5) Audio fingerprint
+        # -------------------------------------------------
+        audio_fp = extract_audio_fingerprint(enf_path)
 
+        # -------------------------------------------------
+        # 6) Frames
+        # -------------------------------------------------
         frame_hashes = []
         for f in frames:
             if f:
@@ -102,6 +110,9 @@ def process():
 
         video_phash = chain_hash(None, {"frames": frame_hashes}) if frame_hashes else None
 
+        # -------------------------------------------------
+        # 7) Persist
+        # -------------------------------------------------
         proof_id = save_proof_and_results(
             user_id=user_id,
             clip_seconds=clip_seconds,
@@ -130,5 +141,4 @@ def process():
 
     finally:
         safe_unlink(raw_path)
-        safe_unlink(wav_path)
-        safe_unlink(trimmed_path)
+        safe_unlink(enf_path)
