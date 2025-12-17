@@ -3,7 +3,9 @@ import subprocess
 import traceback
 import hashlib
 import wave
+
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 from enf import extract_enf_from_wav
 from audio_fingerprint import extract_audio_fingerprint
@@ -12,9 +14,37 @@ from hash_chain import chain_hash
 from persist import save_proof_and_results
 from utils import require_worker_secret, safe_unlink
 
+# -------------------------------------------------
+# APP + CORS
+# -------------------------------------------------
 app = Flask(__name__)
 
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    supports_credentials=False
+)
 
+# -------------------------------------------------
+# PRE-FLIGHT (REQUIRED FOR CHROME)
+# -------------------------------------------------
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        return "", 204
+
+
+@app.after_request
+def add_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    return response
+
+
+# -------------------------------------------------
+# HELPERS
+# -------------------------------------------------
 def sha256_file(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -30,6 +60,9 @@ def wav_duration_seconds(path: str) -> float:
     return frames / float(rate) if rate else 0.0
 
 
+# -------------------------------------------------
+# MAIN PROCESS ENDPOINT
+# -------------------------------------------------
 @app.route("/process", methods=["POST"])
 @require_worker_secret
 def process():
@@ -53,10 +86,7 @@ def process():
     audio.save(raw_path)
 
     # -------------------------------------------------
-    # 2) HARD CONVERT for ENF:
-    #    - mono
-    #    - 1000 Hz (!!!)
-    #    - max 30 seconds
+    # 2) HARD CONVERT for ENF
     # -------------------------------------------------
     enf_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     enf_path = enf_tmp.name
@@ -85,16 +115,16 @@ def process():
 
     try:
         # -------------------------------------------------
-        # 3) Hash + duration (SAFE SIZE)
+        # 3) Hash + duration
         # -------------------------------------------------
         clip_sha256 = sha256_file(enf_path)
         clip_seconds = wav_duration_seconds(enf_path)
 
         # -------------------------------------------------
-        # 4) ENF (NOW MEMORY SAFE)
+        # 4) ENF
         # -------------------------------------------------
-        enf_hash, enf_trace_png, enf_spec_png, enf_quality, f_mean, f_std = extract_enf_from_wav(enf_path)
-
+        enf_hash, enf_trace_png, enf_spec_png, enf_quality, f_mean, f_std = \
+            extract_enf_from_wav(enf_path)
 
         # -------------------------------------------------
         # 5) Audio fingerprint
@@ -102,7 +132,7 @@ def process():
         audio_fp = extract_audio_fingerprint(enf_path)
 
         # -------------------------------------------------
-        # 6) Frames
+        # 6) Frames → pHash
         # -------------------------------------------------
         frame_hashes = []
         for f in frames:
