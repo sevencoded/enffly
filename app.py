@@ -3,7 +3,6 @@ import subprocess
 import traceback
 import hashlib
 import wave
-
 from flask import Flask, request, jsonify
 
 from enf import extract_enf_from_wav
@@ -31,6 +30,22 @@ def wav_duration_seconds(path: str) -> float:
     return frames / float(rate) if rate else 0.0
 
 
+def trim_wav(in_path: str, out_path: str, max_seconds: int = 30):
+    with wave.open(in_path, "rb") as w:
+        nch = w.getnchannels()
+        sampwidth = w.getsampwidth()
+        fr = w.getframerate()
+
+        max_frames = int(fr * max_seconds)
+        frames = w.readframes(max_frames)
+
+    with wave.open(out_path, "wb") as w2:
+        w2.setnchannels(nch)
+        w2.setsampwidth(sampwidth)
+        w2.setframerate(fr)
+        w2.writeframes(frames)
+
+
 @app.route("/process", methods=["POST"])
 @require_worker_secret
 def process():
@@ -54,7 +69,6 @@ def process():
     wav_path = wav_tmp.name
 
     try:
-        # Convert ANY input audio -> WAV PCM
         subprocess.run(
             ["ffmpeg", "-y", "-i", raw_path, "-ac", "1", "-ar", "44100", wav_path],
             stdout=subprocess.DEVNULL,
@@ -66,21 +80,21 @@ def process():
         safe_unlink(wav_path)
         return jsonify({
             "error": "audio_conversion_failed",
-            "details": e.stderr.decode("utf-8", errors="replace")[:400]
+            "details": e.stderr.decode("utf-8", errors="replace")[:300]
         }), 400
 
+    trimmed_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    trimmed_path = trimmed_tmp.name
+    trim_wav(wav_path, trimmed_path, max_seconds=30)
+
     try:
-        # REQUIRED by DB schema
-        clip_sha256 = sha256_file(wav_path)
-        clip_seconds = wav_duration_seconds(wav_path)
+        clip_sha256 = sha256_file(trimmed_path)
+        clip_seconds = wav_duration_seconds(trimmed_path)
 
-        # ENF
-        enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(wav_path)
+        enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(trimmed_path)
 
-        # Audio fingerprint
-        audio_fp = extract_audio_fingerprint(wav_path)
+        audio_fp = extract_audio_fingerprint(trimmed_path)
 
-        # Frames
         frame_hashes = []
         for f in frames:
             if f:
@@ -117,3 +131,4 @@ def process():
     finally:
         safe_unlink(raw_path)
         safe_unlink(wav_path)
+        safe_unlink(trimmed_path)
