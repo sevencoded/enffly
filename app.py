@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 from enf import extract_enf_from_wav
 from audio_fingerprint import extract_audio_fingerprint
 from video_phash import phash_from_image_bytes
-from hash_chain import compute_chain_hash
+from hash_chain import chain_hash
 from persist import save_proof_and_results
 from utils import require_worker_secret, safe_unlink
 
