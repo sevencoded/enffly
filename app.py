@@ -18,7 +18,7 @@ app = Flask(__name__)
 WORKER_SECRET = os.getenv("WORKER_SECRET", "")
 
 MIN_SECONDS = 30.0
-MAX_SECONDS = 35.0
+MAX_SECONDS = 50.0
 TARGET_SR = 44100   # ⬅️ VAŽNO
 
 
