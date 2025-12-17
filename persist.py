@@ -18,19 +18,14 @@ def save_proof_and_results(
 ):
     proof_id = str(uuid.uuid4())
 
-    # ---- chain head (simple version) ----
     head = supabase_client.from_("forensic_chain_head") \
         .select("head_hash") \
         .eq("user_id", user_id) \
         .execute()
 
-    prev_hash = None
-    if head.data:
-        prev_hash = head.data[0]["head_hash"]
+    prev_hash = head.data[0]["head_hash"] if head.data else None
+    current_chain_hash = clip_sha256
 
-    current_chain_hash = clip_sha256  # simple, deterministic for now
-
-    # ---- insert forensic result ----
     supabase_client.from_("forensic_results").insert({
         "id": proof_id,
         "user_id": user_id,
@@ -54,14 +49,12 @@ def save_proof_and_results(
         "enf_png_path": f"{user_id}/{proof_id}_enf.png",
     }).execute()
 
-    # ---- update chain head ----
     supabase_client.from_("forensic_chain_head").upsert({
         "user_id": user_id,
         "head_hash": current_chain_hash,
         "updated_at": datetime.utcnow().isoformat(),
     }).execute()
 
-    # ---- upload ENF image ----
     supabase_client.storage.from_("main_videos").upload(
         f"{user_id}/{proof_id}_enf.png",
         enf_png_bytes,
