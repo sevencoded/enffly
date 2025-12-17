@@ -107,11 +107,12 @@ def process():
         }), 200
 
     except Exception as e:
-        return jsonify({
-            "error": "processing_failed",
-            "details": str(e)
-        }), 500
-
+    import traceback
+    return jsonify({
+        "error": "processing_failed",
+        "details": repr(e),
+        "trace": traceback.format_exc().splitlines()[-3:]
+    }), 500
     finally:
         safe_unlink(raw_path)
         safe_unlink(wav_path)
