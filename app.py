@@ -93,7 +93,8 @@ def process():
         # -------------------------------------------------
         # 4) ENF (NOW MEMORY SAFE)
         # -------------------------------------------------
-        enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(enf_path)
+        enf_hash, enf_trace_png, enf_spec_png, enf_quality, f_mean, f_std = extract_enf_from_wav(enf_path)
+
 
         # -------------------------------------------------
         # 5) Audio fingerprint
@@ -123,7 +124,8 @@ def process():
             enf_freq_std=f_std,
             audio_fp=audio_fp,
             video_phash=video_phash,
-            enf_png_bytes=enf_png,
+            enf_trace_png_bytes=enf_trace_png,
+            enf_spectrogram_png_bytes=enf_spec_png,
         )
 
         return jsonify({
