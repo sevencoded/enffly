@@ -43,7 +43,7 @@ def process():
             if f:
                 frame_hashes.append(phash_from_image_bytes(f.read()))
 
-        combined_phash = compute_chain_hash(frame_hashes) if frame_hashes else None
+        combined_phash = chain_hash(None, {"frames": frame_hashes}) if frame_hashes else None
 
         # ---- Persist ----
         proof_id = save_proof_and_results(
