@@ -3,6 +3,29 @@ import uuid
 from utils import supabase_client
 
 
+def _ensure_upload_ok(resp, label: str, path: str):
+    """
+    supabase-py upload često NE baca exception,
+    nego vraća objekat/dict sa error/statusCode.
+    Ovo forsira fail kad upload ne uspe.
+    """
+    # resp može biti dict, ili neki object sa .error / .status_code
+    err = None
+    status = None
+
+    if isinstance(resp, dict):
+        err = resp.get("error") or resp.get("message")
+        status = resp.get("statusCode") or resp.get("status") or resp.get("code")
+    else:
+        # pokušaj atributa (razne verzije klijenta)
+        err = getattr(resp, "error", None)
+        status = getattr(resp, "status_code", None) or getattr(resp, "status", None)
+
+    # Neki klijenti ne daju status, pa je dovoljno da err nije None
+    if err:
+        raise RuntimeError(f"{label} upload failed for {path}: {err} (status={status})")
+
+
 def save_proof_and_results(
     *,
     user_id: str,
@@ -17,14 +40,15 @@ def save_proof_and_results(
     enf_trace_png_bytes: bytes,
     enf_spectrogram_png_bytes: bytes,
 ):
-    # -------------------------------------------------
-    # 1) GENERATE PROOF ID
-    # -------------------------------------------------
     proof_id = str(uuid.uuid4())
 
-    # -------------------------------------------------
-    # 2) GET PREVIOUS CHAIN HEAD
-    # -------------------------------------------------
+    # Guard: bytes moraju postojati
+    if not enf_trace_png_bytes or len(enf_trace_png_bytes) < 100:
+        raise ValueError("ENF trace PNG bytes missing/too small")
+    if not enf_spectrogram_png_bytes or len(enf_spectrogram_png_bytes) < 100:
+        raise ValueError("ENF spectrogram PNG bytes missing/too small")
+
+    # Prev hash
     head = (
         supabase_client
         .from_("forensic_chain_head")
@@ -32,12 +56,12 @@ def save_proof_and_results(
         .eq("user_id", user_id)
         .execute()
     )
-
     prev_hash = head.data[0]["head_hash"] if head.data else None
 
-    # -------------------------------------------------
-    # 3) INSERT FORENSIC RESULT (METADATA ONLY)
-    # -------------------------------------------------
+    trace_path = f"{user_id}/{proof_id}_enf_trace.png"
+    spec_path = f"{user_id}/{proof_id}_enf_spectrogram.png"
+
+    # Insert metadata (putanje u DB)
     supabase_client.from_("forensic_results").insert({
         "id": proof_id,
         "user_id": user_id,
@@ -52,31 +76,27 @@ def save_proof_and_results(
         "video_phash": video_phash,
         "chain_prev": prev_hash,
         "chain_hash": clip_sha256,
-        "enf_trace_path": f"{user_id}/{proof_id}_enf_trace.png",
-        "enf_spectrogram_path": f"{user_id}/{proof_id}_enf_spectrogram.png",
+        "enf_trace_path": trace_path,
+        "enf_spectrogram_path": spec_path,
     }).execute()
 
-    # -------------------------------------------------
-    # 4) UPLOAD ENF TRACE (GRAPH)
-    # -------------------------------------------------
-    supabase_client.storage.from_("main_videos").upload(
-        f"{user_id}/{proof_id}_enf_trace.png",
+    # Upload TRACE
+    r1 = supabase_client.storage.from_("main_videos").upload(
+        trace_path,
         enf_trace_png_bytes,
-        {"content-type": "image/png"},
+        {"content-type": "image/png", "upsert": "true"},
     )
+    _ensure_upload_ok(r1, "ENF TRACE", trace_path)
 
-    # -------------------------------------------------
-    # 5) UPLOAD RAW ENF SPECTROGRAM (CRITICAL FIX)
-    # -------------------------------------------------
-    supabase_client.storage.from_("main_videos").upload(
-        f"{user_id}/{proof_id}_enf_spectrogram.png",
+    # Upload SPECTROGRAM (RAW)
+    r2 = supabase_client.storage.from_("main_videos").upload(
+        spec_path,
         enf_spectrogram_png_bytes,
-        {"content-type": "image/png"},
+        {"content-type": "image/png", "upsert": "true"},
     )
+    _ensure_upload_ok(r2, "ENF SPECTROGRAM", spec_path)
 
-    # -------------------------------------------------
-    # 6) UPDATE CHAIN HEAD
-    # -------------------------------------------------
+    # Update chain head
     supabase_client.from_("forensic_chain_head").upsert({
         "user_id": user_id,
         "head_hash": clip_sha256,
