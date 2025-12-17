@@ -1,47 +1,35 @@
-import os
 import uuid
-from typing import Optional, Dict, Any, Tuple
+from datetime import datetime
+from utils import supabase_client
 
-from supabase import create_client
+def save_proof_and_results(
+    user_id,
+    enf_hash,
+    enf_quality,
+    audio_fp,
+    video_phash,
+    enf_png_bytes,
+):
+    proof_id = str(uuid.uuid4())
 
-def _client():
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_KEY")
-    if not url or not key:
-        return None
-    return create_client(url, key)
-
-def get_chain_head(user_id: str) -> Optional[str]:
-    sb = _client()
-    if not sb:
-        return None
-    res = sb.table("forensic_chain_head").select("head_hash").eq("user_id", user_id).limit(1).execute()
-    if res.data:
-        return res.data[0].get("head_hash")
-    return None
-
-def set_chain_head(user_id: str, head_hash: str) -> None:
-    sb = _client()
-    if not sb:
-        return
-    # upsert
-    sb.table("forensic_chain_head").upsert({
+    supabase_client.from_("proofs").insert({
+        "id": proof_id,
         "user_id": user_id,
-        "head_hash": head_hash
+        "created_at": datetime.utcnow().isoformat(),
     }).execute()
 
-def save_result(row: Dict[str, Any]) -> None:
-    sb = _client()
-    if not sb:
-        return
-    sb.table("forensic_results").insert(row).execute()
+    supabase_client.from_("forensic_results").insert({
+        "proof_id": proof_id,
+        "enf_hash": enf_hash,
+        "enf_quality": enf_quality,
+        "audio_fp": audio_fp,
+        "video_phash": video_phash,
+    }).execute()
 
-def upload_png(user_id: str, proof_id: str, png_bytes: bytes) -> Optional[str]:
-    """Optional: store ENF png in Supabase Storage bucket 'main_videos' (or change bucket name)."""
-    sb = _client()
-    if not sb:
-        return None
-    bucket = os.getenv("SUPABASE_BUCKET", "main_videos")
-    path = f"enf/{user_id}/{proof_id}.png"
-    sb.storage.from_(bucket).upload(path, png_bytes, {"contentType": "image/png", "upsert": "true"})
-    return path
+    supabase_client.storage.from_("main_videos").upload(
+        f"{user_id}/{proof_id}_enf.png",
+        enf_png_bytes,
+        {"content-type": "image/png"},
+    )
+
+    return proof_id
