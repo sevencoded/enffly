@@ -1,5 +1,6 @@
 import tempfile
 import subprocess
+import traceback
 from flask import Flask, request, jsonify
 
 from enf import extract_enf_from_wav
@@ -28,14 +29,14 @@ def process():
         return jsonify({"error": "missing_audio_or_user"}), 400
 
     # -------------------------------------------------
-    # 1) Save ORIGINAL audio (any format)
+    # 1) Save original audio (ANY format)
     # -------------------------------------------------
     raw_tmp = tempfile.NamedTemporaryFile(delete=False)
     raw_path = raw_tmp.name
     audio.save(raw_path)
 
     # -------------------------------------------------
-    # 2) Convert to WAV (mono, 44.1kHz) using ffmpeg
+    # 2) Convert to WAV (mono, 44.1kHz)
     # -------------------------------------------------
     wav_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     wav_path = wav_tmp.name
@@ -63,7 +64,7 @@ def process():
 
     try:
         # -------------------------------------------------
-        # 3) ENF extraction (now SAFE WAV)
+        # 3) ENF extraction
         # -------------------------------------------------
         enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(wav_path)
 
@@ -87,7 +88,7 @@ def process():
         )
 
         # -------------------------------------------------
-        # 6) Persist
+        # 6) Persist to Supabase
         # -------------------------------------------------
         proof_id = save_proof_and_results(
             user_id=user_id,
@@ -107,12 +108,12 @@ def process():
         }), 200
 
     except Exception as e:
-    import traceback
-    return jsonify({
-        "error": "processing_failed",
-        "details": repr(e),
-        "trace": traceback.format_exc().splitlines()[-3:]
-    }), 500
+        return jsonify({
+            "error": "processing_failed",
+            "details": repr(e),
+            "trace": traceback.format_exc().splitlines()[-3:]
+        }), 500
+
     finally:
         safe_unlink(raw_path)
         safe_unlink(wav_path)
