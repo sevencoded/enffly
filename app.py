@@ -1,4 +1,5 @@
 import tempfile
+import subprocess
 from flask import Flask, request, jsonify
 
 from enf import extract_enf_from_wav
@@ -17,7 +18,6 @@ def process():
     audio = request.files.get("audio")
     user_id = request.form.get("user_id")
 
-    # frame_1, frame_2, frame_3 (opcioni)
     frames = [
         request.files.get("frame_1"),
         request.files.get("frame_2"),
@@ -27,19 +27,54 @@ def process():
     if not audio or not user_id:
         return jsonify({"error": "missing_audio_or_user"}), 400
 
-    # ---- save audio temp ----
-    audio_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    audio_path = audio_tmp.name
-    audio.save(audio_path)
+    # -------------------------------------------------
+    # 1) Save ORIGINAL audio (any format)
+    # -------------------------------------------------
+    raw_tmp = tempfile.NamedTemporaryFile(delete=False)
+    raw_path = raw_tmp.name
+    audio.save(raw_path)
+
+    # -------------------------------------------------
+    # 2) Convert to WAV (mono, 44.1kHz) using ffmpeg
+    # -------------------------------------------------
+    wav_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    wav_path = wav_tmp.name
 
     try:
-        # ---- ENF ----
-        enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(audio_path)
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", raw_path,
+                "-ac", "1",
+                "-ar", "44100",
+                wav_path
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        safe_unlink(raw_path)
+        safe_unlink(wav_path)
+        return jsonify({
+            "error": "audio_conversion_failed",
+            "details": e.stderr.decode("utf-8")[:300]
+        }), 400
 
-        # ---- Audio fingerprint ----
-        audio_fp = extract_audio_fingerprint(audio_path)
+    try:
+        # -------------------------------------------------
+        # 3) ENF extraction (now SAFE WAV)
+        # -------------------------------------------------
+        enf_hash, enf_png, enf_quality, f_mean, f_std = extract_enf_from_wav(wav_path)
 
-        # ---- pHash from frames ----
+        # -------------------------------------------------
+        # 4) Audio fingerprint
+        # -------------------------------------------------
+        audio_fp = extract_audio_fingerprint(wav_path)
+
+        # -------------------------------------------------
+        # 5) Frame hashes
+        # -------------------------------------------------
         frame_hashes = []
         for f in frames:
             if f:
@@ -51,7 +86,9 @@ def process():
             else None
         )
 
-        # ---- Persist ----
+        # -------------------------------------------------
+        # 6) Persist
+        # -------------------------------------------------
         proof_id = save_proof_and_results(
             user_id=user_id,
             enf_hash=enf_hash,
@@ -69,5 +106,12 @@ def process():
             "enf_quality": enf_quality,
         }), 200
 
+    except Exception as e:
+        return jsonify({
+            "error": "processing_failed",
+            "details": str(e)
+        }), 500
+
     finally:
-        safe_unlink(audio_path)
+        safe_unlink(raw_path)
+        safe_unlink(wav_path)
