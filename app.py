@@ -26,7 +26,7 @@ CORS(
 )
 
 # -------------------------------------------------
-# PRE-FLIGHT (REQUIRED FOR CHROME)
+# PRE-FLIGHT
 # -------------------------------------------------
 @app.before_request
 def handle_preflight():
@@ -68,6 +68,7 @@ def wav_duration_seconds(path: str) -> float:
 def process():
     audio = request.files.get("audio")
     user_id = request.form.get("user_id")
+    proof_name = request.form.get("proof_name")  # ← KLJUČNO
 
     frames = [
         request.files.get("frame_1"),
@@ -75,8 +76,14 @@ def process():
         request.files.get("frame_3"),
     ]
 
+    # ---------------- VALIDATION ----------------
     if not audio or not user_id:
         return jsonify({"error": "missing_audio_or_user"}), 400
+
+    if not proof_name or len(proof_name.strip()) < 2:
+        return jsonify({"error": "invalid_proof_name"}), 400
+
+    proof_name = proof_name.strip()
 
     # -------------------------------------------------
     # 1) Save raw audio
@@ -142,10 +149,11 @@ def process():
         video_phash = chain_hash(None, {"frames": frame_hashes}) if frame_hashes else None
 
         # -------------------------------------------------
-        # 7) Persist
+        # 7) Persist (FIXED)
         # -------------------------------------------------
         proof_id = save_proof_and_results(
             user_id=user_id,
+            proof_name=proof_name,  # ← OVO JE FALILO
             clip_seconds=clip_seconds,
             clip_sha256=clip_sha256,
             enf_hash=enf_hash,
