@@ -16,7 +16,7 @@ UPLOAD_BUCKET = "uploads"
 
 
 def download_audio(storage_path, local_path):
-    bucket = sb.storage.from_(UPLOAD_BUCKET)
+    bucket = sb.storage.from_("main_videos")
     audio_bytes = bucket.download(storage_path)
 
     with open(local_path, "wb") as f:
