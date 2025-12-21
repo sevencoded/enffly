@@ -2,39 +2,28 @@
 import os
 import time
 import subprocess
-from persist import (
-    fetch_next_job,
-    mark_processing,
-    mark_done,
-    mark_failed,
-)
+from persist import fetch_next_job, mark_processing, mark_done, mark_failed
 from utils import safe_unlink
 
 
 def process_job(job):
     job_id = job["id"]
-    audio_path = job["audio_path"]  # PUTANJA NA FLY.IO, ne Supabase
+    audio_path = job["audio_path"]  # LOKALNA PUTANJA NA FLY.IO
 
-    workdir = f"/tmp/uploads/{job_id}"
-    os.makedirs(workdir, exist_ok=True)
-
-    local_audio = audio_path
+    workdir = os.path.dirname(audio_path)
     enf_audio = os.path.join(workdir, "audio_enf.wav")
 
     try:
-        # 1️⃣ validacija
-        if not os.path.exists(local_audio):
-            raise FileNotFoundError(f"Audio not found: {local_audio}")
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(audio_path)
 
-        # 2️⃣ mark processing
         mark_processing(job_id)
 
-        # 3️⃣ ffmpeg ENF prep
         subprocess.run(
             [
                 "ffmpeg",
                 "-y",
-                "-i", local_audio,
+                "-i", audio_path,
                 "-ac", "1",
                 "-ar", "1000",
                 "-t", "30",
@@ -45,8 +34,12 @@ def process_job(job):
             stderr=subprocess.DEVNULL,
         )
 
-        # ⚠️ ovde ide ENF analiza + upload rezultata u main_videos
-        # (PNG, trace, spectrogram)
+        # ⬇⬇⬇
+        # OVDE IDE:
+        # - ENF analiza
+        # - generisanje PNG / trace / spectrogram
+        # - upload SAMO tih fajlova u Supabase bucket `main_videos`
+        # - upis forensic_results
 
         mark_done(job_id)
 
@@ -56,7 +49,7 @@ def process_job(job):
 
     finally:
         safe_unlink(enf_audio)
-        # ❗ audio se NE briše ovde ako backend još koristi
+        # audio se briše KASNIJE (cron / cleanup), ne ovde
 
 
 def main_loop():
@@ -64,7 +57,6 @@ def main_loop():
 
     while True:
         job = fetch_next_job()
-
         if not job:
             time.sleep(2)
             continue
