@@ -1,5 +1,4 @@
 # persist.py
-import json
 from datetime import datetime
 from supabase import create_client
 import os
@@ -11,8 +10,8 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def create_job(job_id, user_id, audio_path, frame_paths):
-    sb.table("jobs").insert({
-        "job_id": job_id,
+    sb.table("forensic_jobs").insert({
+        "id": job_id,
         "user_id": user_id,
         "audio_path": audio_path,
         "frame_paths": frame_paths,
@@ -23,29 +22,30 @@ def create_job(job_id, user_id, audio_path, frame_paths):
 
 
 def fetch_next_job():
-    res = sb.rpc("fetch_next_job").execute()
+    res = sb.rpc("fetch_next_forensic_job").execute()
     return res.data[0] if res.data else None
 
 
 def mark_processing(job_id):
-    sb.table("jobs").update({
+    sb.table("forensic_jobs").update({
         "status": "PROCESSING",
-        "attempt_count": sb.table("jobs").select("attempt_count").eq("job_id", job_id),
+        "attempt_count": sb.table("forensic_jobs")
+            .select("attempt_count")
+            .eq("id", job_id),
         "started_at": datetime.utcnow().isoformat()
-    }).eq("job_id", job_id).execute()
+    }).eq("id", job_id).execute()
 
 
-def mark_done(job_id, **results):
-    sb.table("jobs").update({
+def mark_done(job_id):
+    sb.table("forensic_jobs").update({
         "status": "DONE",
-        "finished_at": datetime.utcnow().isoformat(),
-        "results": results
-    }).eq("job_id", job_id).execute()
+        "finished_at": datetime.utcnow().isoformat()
+    }).eq("id", job_id).execute()
 
 
 def mark_failed(job_id, reason):
-    sb.table("jobs").update({
+    sb.table("forensic_jobs").update({
         "status": "FAILED",
         "error_reason": reason,
         "finished_at": datetime.utcnow().isoformat()
-    }).eq("job_id", job_id).execute()
+    }).eq("id", job_id).execute()
