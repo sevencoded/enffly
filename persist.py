@@ -28,8 +28,11 @@ def fetch_next_job():
     if not res.data:
         return None
 
-    return res.data
+    if isinstance(res.data, list):
+        return res.data[0] if res.data else None
 
+    # ako vraća dict
+    return res.data
 
 def mark_processing(job_id):
     sb.table("forensic_jobs").update({
