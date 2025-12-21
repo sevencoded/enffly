@@ -1,83 +1,70 @@
 # worker.py
+import os
 import time
-import traceback
 import subprocess
-from datetime import datetime, timedelta
-
-from enf import extract_enf_from_wav
-from audio_fingerprint import extract_audio_fingerprint
-from video_phash import phash_from_image_bytes
-from hash_chain import chain_hash
-
 from persist import (
     fetch_next_job,
     mark_processing,
     mark_done,
     mark_failed,
+    sb
 )
 from utils import safe_unlink
 
-MAX_ATTEMPTS = 3
-MAX_PROCESSING_TIME = timedelta(hours=2)
 
-FFMPEG = "ffmpeg"
+UPLOAD_BUCKET = "uploads"
+
+
+def download_audio(storage_path, local_path):
+    bucket = sb.storage.from_(UPLOAD_BUCKET)
+    audio_bytes = bucket.download(storage_path)
+
+    with open(local_path, "wb") as f:
+        f.write(audio_bytes)
 
 
 def process_job(job):
-    job_id = job["id"]              # ✅ ISPRAVNO
+    job_id = job["id"]
     audio_path = job["audio_path"]
-    frame_paths = job.get("frame_paths") or []
 
-    enf_wav = audio_path.replace(".wav", "_enf.wav")
+    workdir = f"/tmp/uploads/{job_id}"
+    os.makedirs(workdir, exist_ok=True)
+
+    local_audio = os.path.join(workdir, "audio.wav")
+    enf_audio = os.path.join(workdir, "audio_enf.wav")
 
     try:
-        # === FFmpeg normalize ===
+        # 1️⃣ download audio locally
+        download_audio(audio_path, local_audio)
+
+        # 2️⃣ mark as processing
+        mark_processing(job_id)
+
+        # 3️⃣ run ffmpeg
         subprocess.run(
             [
-                FFMPEG,
+                "ffmpeg",
                 "-y",
-                "-i", audio_path,
+                "-i", local_audio,
                 "-ac", "1",
                 "-ar", "1000",
                 "-t", "30",
-                enf_wav
+                enf_audio
             ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            check=True
         )
 
-        # === ENF ===
-        enf_metrics, enf_png = extract_enf_from_wav(enf_wav)
+        # ⚠️ ovde kasnije ide ENF analiza
 
-        # === Audio fingerprint ===
-        audio_fp = extract_audio_fingerprint(enf_wav)
-
-        # === Image pHash ===
-        image_phashes = []
-        for p in frame_paths:
-            try:
-                with open(p, "rb") as f:
-                    image_phashes.append(phash_from_image_bytes(f.read()))
-            except Exception:
-                image_phashes.append(None)
-
-        # === Final chain hash ===
-        final_hash = chain_hash(
-            enf_metrics,
-            audio_fp,
-            image_phashes
-        )
-
-        # === MARK DONE ===
         mark_done(job_id)
 
+    except Exception as e:
+        mark_failed(job_id, str(e))
+        raise
+
     finally:
-        # === CLEANUP ===
-        safe_unlink(enf_wav)
-        safe_unlink(audio_path)
-        for p in frame_paths:
-            safe_unlink(p)
+        safe_unlink(local_audio)
+        safe_unlink(enf_audio)
 
 
 def main_loop():
@@ -90,28 +77,11 @@ def main_loop():
             time.sleep(2)
             continue
 
-        job_id = job["id"]
-
         try:
-            mark_processing(job_id)
-
-            started = datetime.utcnow()
             process_job(job)
-
-            duration = datetime.utcnow() - started
-            print(f"[OK] job {job_id} in {duration}")
-
-        except Exception:
-            traceback.print_exc()
-
-            attempts = job.get("attempt_count", 0) + 1
-
-            if attempts >= MAX_ATTEMPTS:
-                mark_failed(job_id, "max_attempts_exceeded")
-            else:
-                mark_failed(job_id, "processing_error")
-
-        time.sleep(0.2)
+        except Exception as e:
+            print("Job failed:", e)
+            time.sleep(2)
 
 
 if __name__ == "__main__":
