@@ -1,72 +1,68 @@
-# worker.py
 import os
 import time
-import subprocess
-from persist import fetch_next_job, mark_processing, mark_done, mark_failed
-from utils import safe_unlink
+import traceback
+from supabase import create_client
 
+from enf import extract_enf_from_wav
+from audio_fingerprint import extract_audio_fingerprint
+from video_phash import phash_from_image_bytes
+from hash_chain import chain_hash
+from persist import persist_result
 
-def process_job(job):
-    job_id = job["id"]
-    audio_path = job["audio_path"]  # LOKALNA PUTANJA NA FLY.IO
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
-    workdir = os.path.dirname(audio_path)
-    enf_audio = os.path.join(workdir, "audio_enf.wav")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    try:
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError(audio_path)
+POLL_INTERVAL = 2
 
-        mark_processing(job_id)
+def fetch_job():
+    res = supabase.rpc("fetch_next_job").execute()
+    return res.data[0] if res.data else None
 
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i", audio_path,
-                "-ac", "1",
-                "-ar", "1000",
-                "-t", "30",
-                enf_audio
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        # ⬇⬇⬇
-        # OVDE IDE:
-        # - ENF analiza
-        # - generisanje PNG / trace / spectrogram
-        # - upload SAMO tih fajlova u Supabase bucket `main_videos`
-        # - upis forensic_results
-
-        mark_done(job_id)
-
-    except Exception as e:
-        mark_failed(job_id, str(e))
-        raise
-
-    finally:
-        safe_unlink(enf_audio)
-        # audio se briše KASNIJE (cron / cleanup), ne ovde
-
-
-def main_loop():
-    print("Worker started")
-
+def run():
     while True:
-        job = fetch_next_job()
+        job = fetch_job()
         if not job:
-            time.sleep(2)
+            time.sleep(POLL_INTERVAL)
             continue
 
+        job_id = job["id"]
         try:
-            process_job(job)
-        except Exception as e:
-            print("Job failed:", e)
-            time.sleep(2)
+            audio_path = job["audio_path"]
+            frames = job["frame_paths"]
 
+            enf = extract_enf_from_wav(audio_path)
+            enf_hash = enf["hash"]
+            enf_png = enf["png_path"]
+
+            audio_fp = extract_audio_fingerprint(audio_path)
+
+            phashes = []
+            for p in frames:
+                with open(p, "rb") as f:
+                    phashes.append(phash_from_image_bytes(f.read()))
+
+            persist_result(
+                job=job,
+                enf=enf,
+                audio_fp=audio_fp,
+                phashes=phashes
+            )
+
+            supabase.table("forensic_jobs").update({
+                "status": "DONE",
+                "finished_at": "now()"
+            }).eq("id", job_id).execute()
+
+        except Exception as e:
+            supabase.table("forensic_jobs").update({
+                "status": "FAILED",
+                "error_reason": str(e)
+            }).eq("id", job_id).execute()
+
+        finally:
+            os.system(f"rm -rf /data/jobs/{job_id}")
 
 if __name__ == "__main__":
-    main_loop()
+    run()
