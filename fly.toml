@@ -1,5 +1,4 @@
 app = "enffly"
-
 primary_region = "fra"
 
 [build]
