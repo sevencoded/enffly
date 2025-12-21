@@ -7,40 +7,29 @@ from persist import (
     mark_processing,
     mark_done,
     mark_failed,
-    sb
 )
 from utils import safe_unlink
 
 
-UPLOAD_BUCKET = "uploads"
-
-
-def download_audio(storage_path, local_path):
-    bucket = sb.storage.from_("main_videos")
-    audio_bytes = bucket.download(storage_path)
-
-    with open(local_path, "wb") as f:
-        f.write(audio_bytes)
-
-
 def process_job(job):
     job_id = job["id"]
-    audio_path = job["audio_path"]
+    audio_path = job["audio_path"]  # PUTANJA NA FLY.IO, ne Supabase
 
     workdir = f"/tmp/uploads/{job_id}"
     os.makedirs(workdir, exist_ok=True)
 
-    local_audio = os.path.join(workdir, "audio.wav")
+    local_audio = audio_path
     enf_audio = os.path.join(workdir, "audio_enf.wav")
 
     try:
-        # 1️⃣ download audio locally
-        download_audio(audio_path, local_audio)
+        # 1️⃣ validacija
+        if not os.path.exists(local_audio):
+            raise FileNotFoundError(f"Audio not found: {local_audio}")
 
-        # 2️⃣ mark as processing
+        # 2️⃣ mark processing
         mark_processing(job_id)
 
-        # 3️⃣ run ffmpeg
+        # 3️⃣ ffmpeg ENF prep
         subprocess.run(
             [
                 "ffmpeg",
@@ -51,10 +40,13 @@ def process_job(job):
                 "-t", "30",
                 enf_audio
             ],
-            check=True
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
-        # ⚠️ ovde kasnije ide ENF analiza
+        # ⚠️ ovde ide ENF analiza + upload rezultata u main_videos
+        # (PNG, trace, spectrogram)
 
         mark_done(job_id)
 
@@ -63,8 +55,8 @@ def process_job(job):
         raise
 
     finally:
-        safe_unlink(local_audio)
         safe_unlink(enf_audio)
+        # ❗ audio se NE briše ovde ako backend još koristi
 
 
 def main_loop():
