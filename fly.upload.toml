@@ -1,0 +1,3 @@
+app = "enffly-upload"
+[processes]
+web = "python upload_api.py"
