@@ -24,11 +24,11 @@ def create_job(job_id, user_id, audio_path, frame_paths):
 def fetch_next_job():
     res = sb.rpc("fetch_next_forensic_job").execute()
 
+    # RPC vraća ili dict ili None
     if not res.data:
         return None
 
-    # res.data je LISTA redova
-    return res.data[0]
+    return res.data
 
 
 def mark_processing(job_id):
@@ -48,6 +48,6 @@ def mark_done(job_id):
 def mark_failed(job_id, reason):
     sb.table("forensic_jobs").update({
         "status": "FAILED",
-        "error_reason": reason,
+        "error_reason": str(reason),
         "finished_at": datetime.utcnow().isoformat()
     }).eq("id", job_id).execute()
