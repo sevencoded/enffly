@@ -7,10 +7,7 @@ primary_region = "fra"
 [processes]
   worker = "python worker.py"
 
-kill_signal = "SIGINT"
-kill_timeout = 10
-
 [[vm]]
-  memory = "1gb"
+  memory = "1024mb"
   cpu_kind = "shared"
   cpus = 1
