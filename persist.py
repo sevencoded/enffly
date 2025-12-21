@@ -1,117 +1,51 @@
-import uuid
+# persist.py
+import json
+from datetime import datetime
+from supabase import create_client
+import os
 
-from utils import supabase_client
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
-
-def _ensure_upload_ok(resp, label: str, path: str):
-    """
-    supabase-py upload često NE baca exception,
-    nego vraća objekat/dict sa error/statusCode.
-    Ovo forsira fail kad upload ne uspe.
-    """
-    err = None
-    status = None
-
-    if isinstance(resp, dict):
-        err = resp.get("error") or resp.get("message")
-        status = resp.get("statusCode") or resp.get("status") or resp.get("code")
-    else:
-        err = getattr(resp, "error", None)
-        status = getattr(resp, "status_code", None) or getattr(resp, "status", None)
-
-    if err:
-        raise RuntimeError(
-            f"{label} upload failed for {path}: {err} (status={status})"
-        )
+sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def save_proof_and_results(
-    *,
-    user_id: str,
-    proof_name: str,              # ← DODATO
-    clip_seconds: float,
-    clip_sha256: str,
-    enf_hash: str,
-    enf_quality: float,
-    enf_freq_mean: float,
-    enf_freq_std: float,
-    audio_fp: str | None,
-    video_phash: str | None,
-    enf_trace_png_bytes: bytes,
-    enf_spectrogram_png_bytes: bytes,
-):
-    proof_id = str(uuid.uuid4())
-
-    # ---------------- GUARDS ----------------
-    if not proof_name or len(proof_name.strip()) < 2:
-        raise ValueError("Invalid proof name")
-
-    proof_name = proof_name.strip()
-
-    if not enf_trace_png_bytes or len(enf_trace_png_bytes) < 100:
-        raise ValueError("ENF trace PNG bytes missing/too small")
-    if not enf_spectrogram_png_bytes or len(enf_spectrogram_png_bytes) < 100:
-        raise ValueError("ENF spectrogram PNG bytes missing/too small")
-
-    # ---------------- PREV HASH ----------------
-    head = (
-        supabase_client
-        .from_("forensic_chain_head")
-        .select("head_hash")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    prev_hash = head.data[0]["head_hash"] if head.data else None
-
-    trace_path = f"{user_id}/{proof_id}_enf_trace.png"
-    spec_path = f"{user_id}/{proof_id}_enf_spectrogram.png"
-
-    # ---------------- INSERT METADATA ----------------
-    try:
-        supabase_client.from_("forensic_results").insert({
-            "id": proof_id,
-            "user_id": user_id,
-            "name": proof_name,          # ← KLJUČNO
-            "clip_seconds": clip_seconds,
-            "clip_sha256": clip_sha256,
-            "enf_hash": enf_hash,
-            "enf_quality": enf_quality,
-            "enf_freq_mean": enf_freq_mean,
-            "enf_freq_std": enf_freq_std,
-            "audio_fp": audio_fp,
-            "audio_fp_algo": "chromaprint",
-            "video_phash": video_phash,
-            "chain_prev": prev_hash,
-            "chain_hash": clip_sha256,
-            "enf_trace_path": trace_path,
-            "enf_spectrogram_path": spec_path,
-        }).execute()
-    except Exception as e:
-        msg = str(e)
-        if "forensic_results_user_name_unique" in msg:
-            raise ValueError("duplicate_proof_name")
-        raise
-
-    # ---------------- UPLOAD TRACE ----------------
-    r1 = supabase_client.storage.from_("main_videos").upload(
-        trace_path,
-        enf_trace_png_bytes,
-        {"content-type": "image/png", "upsert": "true"},
-    )
-    _ensure_upload_ok(r1, "ENF TRACE", trace_path)
-
-    # ---------------- UPLOAD SPECTROGRAM ----------------
-    r2 = supabase_client.storage.from_("main_videos").upload(
-        spec_path,
-        enf_spectrogram_png_bytes,
-        {"content-type": "image/png", "upsert": "true"},
-    )
-    _ensure_upload_ok(r2, "ENF SPECTROGRAM", spec_path)
-
-    # ---------------- UPDATE CHAIN HEAD ----------------
-    supabase_client.from_("forensic_chain_head").upsert({
+def create_job(job_id, user_id, audio_path, frame_paths):
+    sb.table("jobs").insert({
+        "job_id": job_id,
         "user_id": user_id,
-        "head_hash": clip_sha256,
+        "audio_path": audio_path,
+        "frame_paths": frame_paths,
+        "status": "QUEUED",
+        "attempt_count": 0,
+        "created_at": datetime.utcnow().isoformat()
     }).execute()
 
-    return proof_id
+
+def fetch_next_job():
+    res = sb.rpc("fetch_next_job").execute()
+    return res.data[0] if res.data else None
+
+
+def mark_processing(job_id):
+    sb.table("jobs").update({
+        "status": "PROCESSING",
+        "attempt_count": sb.table("jobs").select("attempt_count").eq("job_id", job_id),
+        "started_at": datetime.utcnow().isoformat()
+    }).eq("job_id", job_id).execute()
+
+
+def mark_done(job_id, **results):
+    sb.table("jobs").update({
+        "status": "DONE",
+        "finished_at": datetime.utcnow().isoformat(),
+        "results": results
+    }).eq("job_id", job_id).execute()
+
+
+def mark_failed(job_id, reason):
+    sb.table("jobs").update({
+        "status": "FAILED",
+        "error_reason": reason,
+        "finished_at": datetime.utcnow().isoformat()
+    }).eq("job_id", job_id).execute()
