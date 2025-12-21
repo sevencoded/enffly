@@ -20,13 +20,12 @@ ENF_BUCKET = os.environ.get("ENFFLY_RESULTS_BUCKET", "main_videos")
 POLL_INTERVAL = float(os.environ.get("ENFFLY_POLL_INTERVAL", "2"))
 MAX_ATTEMPTS = int(os.environ.get("ENFFLY_MAX_ATTEMPTS", "3"))
 
-# Force system ffmpeg (avoid imageio conflicts)
 os.environ["IMAGEIO_FFMPEG_EXE"] = "/usr/bin/ffmpeg"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---------------- HELPERS ----------------
-def utc_now_iso() -> str:
+def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 def fetch_job():
@@ -34,10 +33,6 @@ def fetch_job():
     return res.data[0] if res.data else None
 
 def ensure_wav(audio_path: str) -> str:
-    """
-    Always return a WAV file.
-    ENF + fpcalc REQUIRE WAV.
-    """
     p = Path(audio_path)
 
     if not p.exists():
@@ -59,18 +54,18 @@ def ensure_wav(audio_path: str) -> str:
 
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg convert failed: {r.stderr.strip()[:300]}"
-        )
+        raise RuntimeError(f"ffmpeg failed: {r.stderr[:300]}")
 
     return str(wav_path)
 
 def upload_bytes(bucket: str, path: str, data: bytes, content_type: str):
-    file_options = {"content-type": content_type, "upsert": "true"}
     supabase.storage.from_(bucket).upload(
         path,
         data,
-        file_options=file_options,
+        file_options={
+            "content-type": content_type,
+            "upsert": "true",
+        },
     )
 
 # ---------------- MAIN LOOP ----------------
@@ -87,48 +82,37 @@ def run():
         job_id = job["id"]
         user_id = job["user_id"]
 
-        print(f"[worker] Picked job {job_id}")
+        print(f"[worker] Processing job {job_id}")
 
         try:
-            # -------- PATHS --------
             audio_wav = ensure_wav(job["audio_path"])
             frame_paths = job.get("frame_paths") or []
 
-            # -------- ENF --------
+            # ---------- ENF ----------
             (
                 enf_hash,
-                trace_png_bytes,
-                spec_png_bytes,
+                trace_png,
+                spec_png,
                 quality,
                 f_mean,
                 f_std,
             ) = extract_enf_from_wav(audio_wav)
 
-            base_path = f"enf_results/{user_id}/{job_id}"
-            trace_path = f"{base_path}/enf_trace.png"
-            spec_path = f"{base_path}/enf_spectrogram.png"
+            base = f"enf_results/{user_id}/{job_id}"
 
-            upload_bytes(
-                ENF_BUCKET,
-                trace_path,
-                trace_png_bytes,
-                "image/png",
-            )
-            upload_bytes(
-                ENF_BUCKET,
-                spec_path,
-                spec_png_bytes,
-                "image/png",
-            )
+            trace_path = f"{base}/enf_trace.png"
+            spec_path = f"{base}/enf_spectrogram.png"
 
-            # -------- AUDIO FINGERPRINT --------
-            fp = extract_audio_fingerprint(audio_wav)
+            upload_bytes(ENF_BUCKET, trace_path, trace_png, "image/png")
+            upload_bytes(ENF_BUCKET, spec_path, spec_png, "image/png")
+
+            # ---------- AUDIO FP ----------
             audio_fp = {
-                "fp": fp,
+                "fp": extract_audio_fingerprint(audio_wav),
                 "algo": "chromaprint_fpcalc_raw",
             }
 
-            # -------- PHASH --------
+            # ---------- PHASH ----------
             phashes = []
             for p in frame_paths:
                 with open(p, "rb") as f:
@@ -136,7 +120,7 @@ def run():
 
             combined_phash = "|".join(phashes)
 
-            # -------- PERSIST RESULT --------
+            # ---------- PERSIST ----------
             enf = {
                 "enf_hash": enf_hash,
                 "quality": quality,
@@ -168,23 +152,29 @@ def run():
             traceback.print_exc()
 
             attempt = int(job.get("attempt_count") or 0) + 1
-            new_status = "QUEUED" if attempt < MAX_ATTEMPTS else "FAILED"
+            status = "QUEUED" if attempt < MAX_ATTEMPTS else "FAILED"
 
             supabase.table("forensic_jobs").update({
-                "status": new_status,
+                "status": status,
                 "attempt_count": attempt,
                 "error_reason": str(e)[:500],
-                "finished_at": utc_now_iso() if new_status == "FAILED" else None,
+                "finished_at": utc_now_iso() if status == "FAILED" else None,
             }).eq("id", job_id).execute()
 
         finally:
-            # -------- CLEANUP --------
-            job_dir = Path("/data/jobs") / str(job_id)
+            # 🔥 CLEANUP ONLY IF FINAL STATE
             try:
-                subprocess.run(
-                    ["rm", "-rf", str(job_dir)],
-                    check=False,
-                )
+                status = supabase.table("forensic_jobs") \
+                    .select("status") \
+                    .eq("id", job_id) \
+                    .single() \
+                    .execute() \
+                    .data["status"]
+
+                if status in ("DONE", "FAILED"):
+                    job_dir = Path("/data/jobs") / str(job_id)
+                    subprocess.run(["rm", "-rf", str(job_dir)], check=False)
+
             except Exception:
                 pass
 
