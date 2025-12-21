@@ -1,56 +1,38 @@
-# persist.py
-from datetime import datetime
+import hashlib
 from supabase import create_client
-import os
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def persist_result(job, enf, audio_fp, phashes):
+    user_id = job["user_id"]
 
-def create_job(job_id, user_id, audio_path, frame_paths):
-    sb.table("forensic_jobs").insert({
-        "id": job_id,
+    head = supabase.table("forensic_chain_head") \
+        .select("head_hash") \
+        .eq("user_id", user_id) \
+        .execute()
+
+    prev = head.data[0]["head_hash"] if head.data else None
+    chain = hashlib.sha256(
+        (str(prev) + enf["hash"]).encode()
+    ).hexdigest()
+
+    supabase.table("forensic_results").insert({
+        "id": job["id"],
         "user_id": user_id,
-        "audio_path": audio_path,
-        "frame_paths": frame_paths,
-        "status": "QUEUED",
-        "attempt_count": 0,
-        "created_at": datetime.utcnow().isoformat()
+        "clip_sha256": enf["hash"],
+        "enf_hash": enf["hash"],
+        "audio_fp": audio_fp,
+        "video_phash": ",".join(phashes),
+        "chain_prev": prev,
+        "chain_hash": chain,
+        "enf_png_path": enf["png_supabase_path"],
+        "name": "ENF Proof"
     }).execute()
 
-
-def fetch_next_job():
-    res = sb.rpc("fetch_next_forensic_job").execute()
-
-    # RPC vraća ili dict ili None
-    if not res.data:
-        return None
-
-    if isinstance(res.data, list):
-        return res.data[0] if res.data else None
-
-    # ako vraća dict
-    return res.data
-
-def mark_processing(job_id):
-    sb.table("forensic_jobs").update({
-        "status": "PROCESSING",
-        "started_at": datetime.utcnow().isoformat()
-    }).eq("id", job_id).execute()
-
-
-def mark_done(job_id):
-    sb.table("forensic_jobs").update({
-        "status": "DONE",
-        "finished_at": datetime.utcnow().isoformat()
-    }).eq("id", job_id).execute()
-
-
-def mark_failed(job_id, reason):
-    sb.table("forensic_jobs").update({
-        "status": "FAILED",
-        "error_reason": str(reason),
-        "finished_at": datetime.utcnow().isoformat()
-    }).eq("id", job_id).execute()
+    supabase.table("forensic_chain_head").upsert({
+        "user_id": user_id,
+        "head_hash": chain
+    }).execute()
