@@ -1,21 +1,20 @@
-# Canonical single-app setup (recommended) so web+worker share the same /data volume.
-# Create a volume: fly volumes create data --size 50
-# Then deploy with this fly.toml.
-
 app = "enffly"
+
+primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile"
 
 [processes]
   web = "gunicorn -w 1 -k gthread --threads 4 -b 0.0.0.0:8080 upload_api:app"
-  worker = "python -u worker.py"
+  worker = "python worker.py"
 
 [http_service]
   internal_port = 8080
+  processes = ["web"]
   force_https = true
-  auto_stop_machines = true
   auto_start_machines = true
+  auto_stop_machines = true
   min_machines_running = 1
 
 [[mounts]]
