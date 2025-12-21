@@ -1,13 +1,3 @@
 app = "enffly-worker"
-primary_region = "fra"
-
-[build]
-  dockerfile = "Dockerfile"
-
 [processes]
-  worker = "python worker.py"
-
-[[vm]]
-  memory = "1024mb"
-  cpu_kind = "shared"
-  cpus = 1
+worker = "python worker.py"
