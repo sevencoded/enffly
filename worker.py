@@ -1,5 +1,4 @@
 # worker.py
-import os
 import time
 import traceback
 import subprocess
@@ -9,6 +8,7 @@ from enf import extract_enf_from_wav
 from audio_fingerprint import extract_audio_fingerprint
 from video_phash import phash_from_image_bytes
 from hash_chain import chain_hash
+
 from persist import (
     fetch_next_job,
     mark_processing,
@@ -24,13 +24,14 @@ FFMPEG = "ffmpeg"
 
 
 def process_job(job):
-    job_id = job["job_id"]
+    job_id = job["id"]              # ✅ ISPRAVNO
     audio_path = job["audio_path"]
-    frame_paths = job["frame_paths"]
+    frame_paths = job.get("frame_paths") or []
 
     enf_wav = audio_path.replace(".wav", "_enf.wav")
 
     try:
+        # === FFmpeg normalize ===
         subprocess.run(
             [
                 FFMPEG,
@@ -46,29 +47,33 @@ def process_job(job):
             stderr=subprocess.DEVNULL,
         )
 
+        # === ENF ===
         enf_metrics, enf_png = extract_enf_from_wav(enf_wav)
+
+        # === Audio fingerprint ===
         audio_fp = extract_audio_fingerprint(enf_wav)
 
+        # === Image pHash ===
         image_phashes = []
         for p in frame_paths:
-            with open(p, "rb") as f:
-                image_phashes.append(phash_from_image_bytes(f.read()))
+            try:
+                with open(p, "rb") as f:
+                    image_phashes.append(phash_from_image_bytes(f.read()))
+            except Exception:
+                image_phashes.append(None)
 
+        # === Final chain hash ===
         final_hash = chain_hash(
             enf_metrics,
             audio_fp,
             image_phashes
         )
 
-        mark_done(
-            job_id=job_id,
-            result_hash=final_hash,
-            enf_metrics=enf_metrics,
-            audio_fp=audio_fp,
-            image_phashes=image_phashes,
-        )
+        # === MARK DONE ===
+        mark_done(job_id)
 
     finally:
+        # === CLEANUP ===
         safe_unlink(enf_wav)
         safe_unlink(audio_path)
         for p in frame_paths:
@@ -85,7 +90,7 @@ def main_loop():
             time.sleep(2)
             continue
 
-        job_id = job["job_id"]
+        job_id = job["id"]
 
         try:
             mark_processing(job_id)
@@ -99,7 +104,9 @@ def main_loop():
         except Exception:
             traceback.print_exc()
 
-            if job["attempt_count"] + 1 >= MAX_ATTEMPTS:
+            attempts = job.get("attempt_count", 0) + 1
+
+            if attempts >= MAX_ATTEMPTS:
                 mark_failed(job_id, "max_attempts_exceeded")
             else:
                 mark_failed(job_id, "processing_error")
