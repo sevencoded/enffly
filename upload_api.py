@@ -67,4 +67,5 @@ def upload():
         "status": "QUEUED"
     }).execute()
 
-    return jsonify({"job_id": job_id, "status": "QUEUED"}), 200
+    return jsonify({"job_id": job_id, "status": "QUEUED"}), 202
+
