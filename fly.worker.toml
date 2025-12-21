@@ -1,3 +1,10 @@
+# If you insist on separate apps, NOTE: volumes are NOT shared between apps.
+# With this project, you should use the single-app fly.toml instead.
 app = "enffly-worker"
+
 [processes]
-worker = "python worker.py"
+worker = "python -u worker.py"
+
+[[mounts]]
+source = "data"
+destination = "/data"

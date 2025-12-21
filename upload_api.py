@@ -1,6 +1,7 @@
 import os
 import uuid
-import tempfile
+from pathlib import Path
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from supabase import create_client
@@ -13,44 +14,57 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = Flask(__name__)
 CORS(app)
 
-DATA_DIR = "/data/jobs"
-os.makedirs(DATA_DIR, exist_ok=True)
+DATA_DIR = Path(os.environ.get("ENFFLY_DATA_DIR", "/data/jobs"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-@app.route("/upload", methods=["POST"])
+ALLOWED_AUDIO_EXT = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
+ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+@app.post("/upload")
 def upload():
+    # NOTE: For production, do NOT trust user_id from the form.
+    # Ideally verify Supabase JWT and derive user_id from it.
     user_id = request.form.get("user_id")
     audio = request.files.get("audio")
-    frames = [
-        request.files.get("frame1"),
-        request.files.get("frame2"),
-        request.files.get("frame3"),
-    ]
+    frames = [request.files.get("frame1"), request.files.get("frame2"), request.files.get("frame3")]
 
     if not user_id or not audio or any(f is None for f in frames):
-        return jsonify({"error": "missing inputs"}), 400
+        return jsonify({"error": "missing inputs (user_id, audio, frame1-3)"}), 400
 
     job_id = str(uuid.uuid4())
-    job_dir = os.path.join(DATA_DIR, job_id)
-    os.makedirs(job_dir, exist_ok=True)
+    job_dir = DATA_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
 
-    audio_path = os.path.join(job_dir, "audio.wav")
-    audio.save(audio_path)
+    # Save audio with real extension (worker converts to wav if needed)
+    audio_name = (audio.filename or "audio").lower()
+    audio_ext = Path(audio_name).suffix if Path(audio_name).suffix else ".wav"
+    if audio_ext not in ALLOWED_AUDIO_EXT:
+        return jsonify({"error": f"unsupported audio type: {audio_ext}"}), 400
+
+    audio_path = job_dir / f"audio{audio_ext}"
+    audio.save(str(audio_path))
 
     frame_paths = []
-    for i, f in enumerate(frames):
-        p = os.path.join(job_dir, f"frame{i+1}.png")
-        f.save(p)
-        frame_paths.append(p)
+    for i, f in enumerate(frames, start=1):
+        img_name = (f.filename or f"frame{i}.png").lower()
+        img_ext = Path(img_name).suffix if Path(img_name).suffix else ".png"
+        if img_ext not in ALLOWED_IMAGE_EXT:
+            return jsonify({"error": f"unsupported image type: {img_ext}"}), 400
+
+        p = job_dir / f"frame{i}{img_ext}"
+        f.save(str(p))
+        frame_paths.append(str(p))
 
     supabase.table("forensic_jobs").insert({
         "id": job_id,
         "user_id": user_id,
-        "audio_path": audio_path,
+        "audio_path": str(audio_path),
         "frame_paths": frame_paths,
         "status": "QUEUED"
     }).execute()
 
-    return jsonify({
-        "job_id": job_id,
-        "status": "QUEUED"
-    })
+    return jsonify({"job_id": job_id, "status": "QUEUED"}), 200
