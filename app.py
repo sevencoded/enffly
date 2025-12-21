@@ -1,184 +1,63 @@
+# app.py
+import os
+import uuid
 import tempfile
-import subprocess
-import traceback
-import hashlib
-import wave
+from datetime import datetime
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from enf import extract_enf_from_wav
-from audio_fingerprint import extract_audio_fingerprint
-from video_phash import phash_from_image_bytes
-from hash_chain import chain_hash
-from persist import save_proof_and_results
-from utils import require_worker_secret, safe_unlink
+from persist import create_job
+from utils import safe_unlink
 
-# -------------------------------------------------
-# APP + CORS
-# -------------------------------------------------
 app = Flask(__name__)
+CORS(app)
 
-CORS(
-    app,
-    resources={r"/*": {"origins": "*"}},
-    supports_credentials=False
-)
-
-# -------------------------------------------------
-# PRE-FLIGHT
-# -------------------------------------------------
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        return "", 204
+UPLOAD_DIR = "/tmp/uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-@app.after_request
-def add_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
-    return response
-
-
-# -------------------------------------------------
-# HELPERS
-# -------------------------------------------------
-def sha256_file(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def wav_duration_seconds(path: str) -> float:
-    with wave.open(path, "rb") as w:
-        frames = w.getnframes()
-        rate = w.getframerate()
-    return frames / float(rate) if rate else 0.0
-
-
-# -------------------------------------------------
-# MAIN PROCESS ENDPOINT
-# -------------------------------------------------
-@app.route("/process", methods=["POST"])
-@require_worker_secret
-def process():
+@app.route("/upload", methods=["POST"])
+def upload():
     audio = request.files.get("audio")
-    user_id = request.form.get("user_id")
-    proof_name = request.form.get("proof_name")  # ← KLJUČNO
-
     frames = [
         request.files.get("frame_1"),
         request.files.get("frame_2"),
         request.files.get("frame_3"),
     ]
+    user_id = request.form.get("user_id")
 
-    # ---------------- VALIDATION ----------------
     if not audio or not user_id:
         return jsonify({"error": "missing_audio_or_user"}), 400
 
-    if not proof_name or len(proof_name.strip()) < 2:
-        return jsonify({"error": "invalid_proof_name"}), 400
-
-    proof_name = proof_name.strip()
-
-    # -------------------------------------------------
-    # 1) Save raw audio
-    # -------------------------------------------------
-    raw_tmp = tempfile.NamedTemporaryFile(delete=False)
-    raw_path = raw_tmp.name
-    audio.save(raw_path)
-
-    # -------------------------------------------------
-    # 2) HARD CONVERT for ENF
-    # -------------------------------------------------
-    enf_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    enf_path = enf_tmp.name
+    job_id = str(uuid.uuid4())
+    job_dir = os.path.join(UPLOAD_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
 
     try:
-        subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", raw_path,
-                "-ac", "1",
-                "-ar", "1000",
-                "-t", "30",
-                enf_path
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        safe_unlink(raw_path)
-        safe_unlink(enf_path)
-        return jsonify({
-            "error": "audio_conversion_failed",
-            "details": e.stderr.decode("utf-8", errors="replace")[:300]
-        }), 400
+        audio_path = os.path.join(job_dir, "audio.wav")
+        audio.save(audio_path)
 
-    try:
-        # -------------------------------------------------
-        # 3) Hash + duration
-        # -------------------------------------------------
-        clip_sha256 = sha256_file(enf_path)
-        clip_seconds = wav_duration_seconds(enf_path)
-
-        # -------------------------------------------------
-        # 4) ENF
-        # -------------------------------------------------
-        enf_hash, enf_trace_png, enf_spec_png, enf_quality, f_mean, f_std = \
-            extract_enf_from_wav(enf_path)
-
-        # -------------------------------------------------
-        # 5) Audio fingerprint
-        # -------------------------------------------------
-        audio_fp = extract_audio_fingerprint(enf_path)
-
-        # -------------------------------------------------
-        # 6) Frames → pHash
-        # -------------------------------------------------
-        frame_hashes = []
-        for f in frames:
+        frame_paths = []
+        for i, f in enumerate(frames):
             if f:
-                frame_hashes.append(phash_from_image_bytes(f.read()))
+                p = os.path.join(job_dir, f"frame_{i+1}.jpg")
+                f.save(p)
+                frame_paths.append(p)
 
-        video_phash = chain_hash(None, {"frames": frame_hashes}) if frame_hashes else None
-
-        # -------------------------------------------------
-        # 7) Persist (FIXED)
-        # -------------------------------------------------
-        proof_id = save_proof_and_results(
+        create_job(
+            job_id=job_id,
             user_id=user_id,
-            proof_name=proof_name,  # ← OVO JE FALILO
-            clip_seconds=clip_seconds,
-            clip_sha256=clip_sha256,
-            enf_hash=enf_hash,
-            enf_quality=enf_quality,
-            enf_freq_mean=f_mean,
-            enf_freq_std=f_std,
-            audio_fp=audio_fp,
-            video_phash=video_phash,
-            enf_trace_png_bytes=enf_trace_png,
-            enf_spectrogram_png_bytes=enf_spec_png,
+            audio_path=audio_path,
+            frame_paths=frame_paths,
         )
 
+        # USER NE ČEKA NIŠTA
         return jsonify({
-            "status": "ok",
-            "proof_id": proof_id,
-            "enf_quality": enf_quality,
-        }), 200
+            "status": "QUEUED",
+            "job_id": job_id
+        }), 202
 
     except Exception as e:
-        return jsonify({
-            "error": "processing_failed",
-            "details": repr(e),
-            "trace": traceback.format_exc().splitlines()[-6:]
-        }), 500
-
-    finally:
-        safe_unlink(raw_path)
-        safe_unlink(enf_path)
+        safe_unlink(job_dir)
+        return jsonify({"error": "upload_failed", "details": str(e)}), 500
