@@ -15,6 +15,7 @@ create table if not exists public.forensic_jobs (
   user_id text not null,
   audio_path text not null,
   frame_paths text[],
+  name text,
   status text not null default 'QUEUED'
     check (status in ('QUEUED','PROCESSING','DONE','FAILED')),
   attempt_count integer not null default 0,

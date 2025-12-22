@@ -29,11 +29,20 @@ def upload():
     # NOTE: For production, do NOT trust user_id from the form.
     # Ideally verify Supabase JWT and derive user_id from it.
     user_id = request.form.get("user_id")
+    proof_name = (request.form.get("proof_name") or request.form.get("name") or "").strip()
     audio = request.files.get("audio")
-    frames = [request.files.get("frame1"), request.files.get("frame2"), request.files.get("frame3")]
+
+    # Accept both naming schemes:
+    # - frame1/frame2/frame3 (old)
+    # - frame_1/frame_2/frame_3 (Flutter current)
+    frames = [
+        request.files.get("frame1") or request.files.get("frame_1"),
+        request.files.get("frame2") or request.files.get("frame_2"),
+        request.files.get("frame3") or request.files.get("frame_3"),
+    ]
 
     if not user_id or not audio or any(f is None for f in frames):
-        return jsonify({"error": "missing inputs (user_id, audio, frame1-3)"}), 400
+        return jsonify({"error": "missing inputs (user_id, audio, frame1-3 or frame_1-3)"}), 400
 
     job_id = str(uuid.uuid4())
     job_dir = DATA_DIR / job_id
@@ -64,7 +73,8 @@ def upload():
         "user_id": user_id,
         "audio_path": str(audio_path),
         "frame_paths": frame_paths,
-        "status": "QUEUED"
+        "status": "QUEUED",
+        "name": proof_name or "ENF Proof",
     }).execute()
 
     return jsonify({"job_id": job_id, "status": "QUEUED"}), 202

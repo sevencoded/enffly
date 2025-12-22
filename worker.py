@@ -4,6 +4,7 @@ import subprocess
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+import hashlib
 
 from supabase import create_client
 
@@ -57,6 +58,13 @@ def ensure_wav(audio_path: str) -> str:
         raise RuntimeError(f"ffmpeg failed: {r.stderr[:300]}")
 
     return str(wav_path)
+
+def sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 def upload_bytes(bucket: str, path: str, data: bytes, content_type: str):
     supabase.storage.from_(bucket).upload(
@@ -127,6 +135,7 @@ def run():
                 "f_mean": f_mean,
                 "f_std": f_std,
                 "clip_seconds": job.get("clip_seconds"),
+                "clip_sha256": sha256_file(audio_wav),
                 "png_path": trace_path,
                 "trace_path": trace_path,
                 "spectrogram_path": spec_path,

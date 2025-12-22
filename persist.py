@@ -45,7 +45,8 @@ def persist_result(*, job: dict, enf: dict, audio_fp: dict, video_phash: str):
         "id": job_id,
         "user_id": user_id,
         "clip_seconds": enf.get("clip_seconds"),
-        "clip_sha256": enf["enf_hash"],
+        # SHA256 of the processed audio clip (WAV after conversion)
+        "clip_sha256": enf.get("clip_sha256") or enf["enf_hash"],
         "enf_hash": enf["enf_hash"],
         "enf_quality": enf.get("quality"),
         "enf_freq_mean": enf.get("f_mean"),
@@ -58,7 +59,7 @@ def persist_result(*, job: dict, enf: dict, audio_fp: dict, video_phash: str):
         "enf_png_path": enf.get("png_path"),
         "enf_trace_path": enf.get("trace_path"),
         "enf_spectrogram_path": enf.get("spectrogram_path"),
-        "name": "ENF Proof",
+        "name": (job.get("name") or "ENF Proof"),
     }).execute()
 
     supabase.table("forensic_chain_head").upsert({
